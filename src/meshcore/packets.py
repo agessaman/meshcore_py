@@ -38,6 +38,7 @@ class PacketType(Enum):
     STATS_CORE = 24
     STATS_RADIO = 25
     STATS_PACKETS = 26
+    WIFI = 25
     BINARY_REQ = 50
     FACTORY_RESET = 51
     PATH_DISCOVERY = 52

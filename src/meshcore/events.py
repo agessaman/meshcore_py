@@ -49,6 +49,9 @@ class EventType(Enum):
     DISABLED = "disabled"
     CONTROL_DATA = "control_data"
     DISCOVER_RESPONSE = "discover_response"
+    WIFI_SSID = "wifi_ssid"
+    WIFI_PASSWORD = "wifi_password"
+    WIFI_CONFIG = "wifi_config"
 
     # Command response types
     OK = "command_ok"

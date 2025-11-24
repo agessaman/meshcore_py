@@ -1,4 +1,6 @@
 import logging
+import socket
+import struct
 from hashlib import sha256
 from typing import Optional
 
@@ -220,3 +222,68 @@ class DeviceCommands(CommandHandlerBase):
         logger.debug("Getting packet statistics")
         # CMD_GET_STATS (56) + STATS_TYPE_PACKETS (2)
         return await self.send(b"\x38\x02", [EventType.STATS_PACKETS, EventType.ERROR])
+
+    # WiFi Configuration Commands (Command code 44, 0x2C)
+    async def set_wifi_ssid(self, ssid: str) -> Event:
+        """Set WiFi SSID (max 31 bytes UTF-8)"""
+        logger.debug(f"Setting WiFi SSID to: {ssid}")
+        ssid_bytes = ssid.encode('utf-8')
+        if len(ssid_bytes) > 31:
+            raise ValueError("SSID too long (max 31 bytes)")
+        # CMD_WIFI (44) + WIFI_SUBCMD_SET_SSID (0) + ssid_len + ssid_data
+        data = struct.pack('<BB B', 0x2C, 0x00, len(ssid_bytes)) + ssid_bytes
+        return await self.send(data, [EventType.OK, EventType.ERROR])
+
+    async def set_wifi_password(self, password: str) -> Event:
+        """Set WiFi password (max 63 bytes UTF-8)"""
+        logger.debug("Setting WiFi password")
+        pwd_bytes = password.encode('utf-8')
+        if len(pwd_bytes) > 63:
+            raise ValueError("Password too long (max 63 bytes)")
+        # CMD_WIFI (44) + WIFI_SUBCMD_SET_PASSWORD (1) + pwd_len + pwd_data
+        data = struct.pack('<BB B', 0x2C, 0x01, len(pwd_bytes)) + pwd_bytes
+        return await self.send(data, [EventType.OK, EventType.ERROR])
+
+    async def get_wifi_ssid(self) -> Event:
+        """Get WiFi SSID"""
+        logger.debug("Getting WiFi SSID")
+        # CMD_WIFI (44) + WIFI_SUBCMD_GET_SSID (2)
+        return await self.send(b"\x2C\x02", [EventType.WIFI_SSID, EventType.ERROR])
+
+    async def get_wifi_password(self) -> Event:
+        """Get WiFi password"""
+        logger.debug("Getting WiFi password")
+        # CMD_WIFI (44) + WIFI_SUBCMD_GET_PASSWORD (3)
+        return await self.send(b"\x2C\x03", [EventType.WIFI_PASSWORD, EventType.ERROR])
+
+    async def get_wifi_config(self) -> Event:
+        """Get WiFi network configuration (status, IP, subnet, gateway, DNS, RSSI, SSID)"""
+        logger.debug("Getting WiFi configuration")
+        # CMD_WIFI (44) + WIFI_SUBCMD_GET_CONFIG (4)
+        return await self.send(b"\x2C\x04", [EventType.WIFI_CONFIG, EventType.ERROR])
+
+    async def set_wifi_enabled(self, enabled: bool) -> Event:
+        """Enable or disable WiFi"""
+        logger.debug(f"Setting WiFi enabled to: {enabled}")
+        # CMD_WIFI (44) + WIFI_SUBCMD_SET_ENABLED (5) + enabled (0 or 1)
+        data = struct.pack('<BB B', 0x2C, 0x05, 1 if enabled else 0)
+        return await self.send(data, [EventType.OK, EventType.ERROR])
+
+    async def set_wifi_config(
+        self,
+        ip: str,
+        subnet: str,
+        gateway: str,
+        dns1: str,
+        dns2: str
+    ) -> Event:
+        """Set static IP configuration (disables DHCP)"""
+        logger.debug(f"Setting WiFi static IP config: ip={ip}, subnet={subnet}, gateway={gateway}")
+        # CMD_WIFI (44) + WIFI_SUBCMD_SET_CONFIG (6) + IP addresses (network byte order)
+        ip_bytes = socket.inet_aton(ip)
+        subnet_bytes = socket.inet_aton(subnet)
+        gateway_bytes = socket.inet_aton(gateway)
+        dns1_bytes = socket.inet_aton(dns1)
+        dns2_bytes = socket.inet_aton(dns2)
+        data = struct.pack('<BB', 0x2C, 0x06) + ip_bytes + subnet_bytes + gateway_bytes + dns1_bytes + dns2_bytes
+        return await self.send(data, [EventType.OK, EventType.ERROR])

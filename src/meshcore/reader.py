@@ -1,5 +1,6 @@
 import logging
 import json
+import socket
 import struct
 import time
 import io
@@ -366,6 +367,102 @@ class MessageReader:
             else:
                 logger.error(f"Unknown stats type: {stats_type}, data: {data.hex()}")
                 await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": f"unknown_stats_type: {stats_type}"}))
+
+        elif packet_type_value == PacketType.WIFI.value:  # RESP_CODE_WIFI (25)
+            logger.debug(f"received WiFi response: {data.hex()}")
+            # RESP_CODE_WIFI: All WiFi responses use code 25 with sub-type byte
+            # Byte 0: response_code (25), Byte 1: wifi_subcommand (0=SSID, 1=PASSWORD, 2=CONFIG)
+            if len(data) < 2:
+                logger.error(f"WiFi response too short: {len(data)} bytes, need at least 2 for header")
+                await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": "invalid_frame_length"}))
+                return
+            
+            wifi_subcommand = data[1]
+            
+            if wifi_subcommand == 0:  # WIFI_SUBCMD_SSID
+                # RESP_CODE_WIFI + SSID: 3 + ssid_len bytes (minimum 3 bytes, maximum 34 bytes)
+                # Format: <B B B (response_code, subcommand, ssid_len) + ssid_data
+                if len(data) < 3:
+                    logger.error(f"WiFi SSID response too short: {len(data)} bytes, expected at least 3")
+                    await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": "invalid_frame_length"}))
+                else:
+                    try:
+                        ssid_len = data[2]
+                        if len(data) < 3 + ssid_len:
+                            logger.error(f"WiFi SSID response too short: {len(data)} bytes, expected {3 + ssid_len}")
+                            await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": "invalid_frame_length"}))
+                        else:
+                            ssid = data[3:3+ssid_len].decode('utf-8', errors='ignore')
+                            res = {'ssid': ssid}
+                            logger.debug(f"parsed WiFi SSID: {res}")
+                            await self.dispatcher.dispatch(Event(EventType.WIFI_SSID, res))
+                    except Exception as e:
+                        logger.error(f"Error parsing WiFi SSID response: {e}, data: {data.hex()}")
+                        await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": f"binary_parse_error: {e}"}))
+            
+            elif wifi_subcommand == 1:  # WIFI_SUBCMD_PASSWORD
+                # RESP_CODE_WIFI + PASSWORD: 3 + pwd_len bytes (minimum 3 bytes, maximum 67 bytes)
+                # Format: <B B B (response_code, subcommand, pwd_len) + pwd_data
+                if len(data) < 3:
+                    logger.error(f"WiFi password response too short: {len(data)} bytes, expected at least 3")
+                    await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": "invalid_frame_length"}))
+                else:
+                    try:
+                        pwd_len = data[2]
+                        if len(data) < 3 + pwd_len:
+                            logger.error(f"WiFi password response too short: {len(data)} bytes, expected {3 + pwd_len}")
+                            await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": "invalid_frame_length"}))
+                        else:
+                            password = data[3:3+pwd_len].decode('utf-8', errors='ignore')
+                            res = {'password': password}
+                            logger.debug(f"parsed WiFi password: {res}")
+                            await self.dispatcher.dispatch(Event(EventType.WIFI_PASSWORD, res))
+                    except Exception as e:
+                        logger.error(f"Error parsing WiFi password response: {e}, data: {data.hex()}")
+                        await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": f"binary_parse_error: {e}"}))
+            
+            elif wifi_subcommand == 2:  # WIFI_SUBCMD_CONFIG
+                # RESP_CODE_WIFI + CONFIG: 26 + ssid_len bytes (minimum 26 bytes, maximum 58 bytes)
+                # Format: <B B B 4s 4s 4s 4s 4s h B (response_code, subcommand, status, ip, subnet, gateway, dns1, dns2, rssi, ssid_len) + ssid_data
+                if len(data) < 26:
+                    logger.error(f"WiFi config response too short: {len(data)} bytes, expected at least 26")
+                    await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": "invalid_frame_length"}))
+                else:
+                    try:
+                        status = data[2]
+                        # IP addresses are in network byte order (big-endian)
+                        ip = socket.inet_ntoa(data[3:7])
+                        subnet = socket.inet_ntoa(data[7:11])
+                        gateway = socket.inet_ntoa(data[11:15])
+                        dns1 = socket.inet_ntoa(data[15:19])
+                        dns2 = socket.inet_ntoa(data[19:23])
+                        # RSSI is signed 16-bit little-endian
+                        rssi = struct.unpack('<h', data[23:25])[0]
+                        ssid_len = data[25]
+                        if len(data) < 26 + ssid_len:
+                            logger.error(f"WiFi config response too short: {len(data)} bytes, expected {26 + ssid_len}")
+                            await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": "invalid_frame_length"}))
+                        else:
+                            ssid = data[26:26+ssid_len].decode('utf-8', errors='ignore') if ssid_len > 0 else ""
+                            res = {
+                                'status': status,
+                                'ip': ip,
+                                'subnet': subnet,
+                                'gateway': gateway,
+                                'dns1': dns1,
+                                'dns2': dns2,
+                                'rssi': rssi,
+                                'ssid': ssid
+                            }
+                            logger.debug(f"parsed WiFi config: {res}")
+                            await self.dispatcher.dispatch(Event(EventType.WIFI_CONFIG, res))
+                    except Exception as e:
+                        logger.error(f"Error parsing WiFi config response: {e}, data: {data.hex()}")
+                        await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": f"binary_parse_error: {e}"}))
+            
+            else:
+                logger.error(f"Unknown WiFi subcommand: {wifi_subcommand}, data: {data.hex()}")
+                await self.dispatcher.dispatch(Event(EventType.ERROR, {"reason": f"unknown_wifi_subcommand: {wifi_subcommand}"}))
 
         elif packet_type_value == PacketType.CHANNEL_INFO.value:
             logger.debug(f"received channel info response: {data.hex()}")
