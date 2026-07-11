@@ -4,6 +4,7 @@ mccli.py : CLI interface to MeschCore BLE companion app
 
 import asyncio
 import logging
+import sys
 
 
 # Make bleak optional - only fail if BLE operations are attempted
@@ -114,27 +115,42 @@ class BLEConnection:
                     self.address, disconnected_callback=self.handle_disconnect
                 )
 
+        # Bind a local: handle_disconnect() resets self.client to the
+        # user-provided value (usually None) if a disconnect event fires
+        # during connect() retries, which would break the pairing calls.
+        client = self.client
         try:
-            await self.client.connect()
-            
-            # Perform pairing if PIN is provided
-            if self.pin is not None:
-                logger.debug(f"Attempting BLE pairing with PIN")
-                try:
-                    await self.client.pair()
-                    logger.info("BLE pairing successful")
-                except Exception as e:
-                    logger.error(f"BLE pairing failed: {e}")
-                    # A failed pairing leaves the transport in a half-usable
-                    # state — re-raise so the caller gets a clean failure
-                    # instead of a silently degraded connection.
-                    await self.client.disconnect()
-                    raise
-                    
+            await client.connect()
         except BleakDeviceNotFoundError:
             return None
         except TimeoutError:
             return None
+
+        # Perform pairing if PIN is provided. On Linux, bleak's pair() only
+        # calls Device1.Pair(); a BlueZ Agent1 must supply the passkey.
+        if self.pin is not None:
+            logger.debug("Attempting BLE pairing with PIN")
+            try:
+                if sys.platform.startswith("linux"):
+                    from .bluez_pairing_agent import passkey_agent
+
+                    async with passkey_agent(self.pin, client):
+                        await client.pair()
+                else:
+                    await client.pair()
+                logger.info("BLE pairing successful")
+            except Exception as e:
+                logger.error(f"BLE pairing failed: {e}")
+                # A failed pairing leaves the transport in a half-usable
+                # state — re-raise so the caller gets a clean failure
+                # instead of a silently degraded connection.
+                try:
+                    await client.disconnect()
+                except Exception as cleanup_exc:
+                    logger.debug(
+                        f"Disconnect after failed pairing: {cleanup_exc}"
+                    )
+                raise
 
         try:
             await self.client.start_notify(UART_TX_CHAR_UUID, self.handle_rx)
