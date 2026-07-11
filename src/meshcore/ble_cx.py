@@ -4,6 +4,7 @@ mccli.py : CLI interface to MeschCore BLE companion app
 
 import asyncio
 import logging
+import sys
 
 
 # Make bleak optional - only fail if BLE operations are attempted
@@ -117,11 +118,18 @@ class BLEConnection:
         try:
             await self.client.connect()
             
-            # Perform pairing if PIN is provided
+            # Perform pairing if PIN is provided. On Linux, bleak's pair() only
+            # calls Device1.Pair(); a BlueZ Agent1 must supply the passkey.
             if self.pin is not None:
-                logger.debug(f"Attempting BLE pairing with PIN")
+                logger.debug("Attempting BLE pairing with PIN")
                 try:
-                    await self.client.pair()
+                    if sys.platform.startswith("linux"):
+                        from .bluez_pairing_agent import passkey_agent
+
+                        async with passkey_agent(self.pin):
+                            await self.client.pair()
+                    else:
+                        await self.client.pair()
                     logger.info("BLE pairing successful")
                 except Exception as e:
                     logger.error(f"BLE pairing failed: {e}")

@@ -1,10 +1,10 @@
 import asyncio
 import unittest
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from meshcore.ble_cx import (
     BLEConnection,
-    UART_SERVICE_UUID,
     UART_TX_CHAR_UUID,
     UART_RX_CHAR_UUID,
 )
@@ -13,21 +13,18 @@ from meshcore.ble_cx import (
 class TestBLEPinPairing(unittest.TestCase):
     """Test BLE PIN pairing functionality"""
 
+    @patch("sys.platform", "darwin")
     @patch("meshcore.ble_cx.BleakClient")
     def test_ble_connection_with_pin_successful_pairing(self, mock_bleak_client):
-        """Test BLE connection with PIN when pairing succeeds"""
-        # Arrange
+        """Non-Linux: pair() is called directly when a PIN is provided."""
         mock_client_instance = self._get_mock_bleak_client()
         mock_bleak_client.return_value = mock_client_instance
 
         address = "00:11:22:33:44:55"
-        pin = "123456"
-        ble_conn = BLEConnection(address=address, pin=pin)
+        ble_conn = BLEConnection(address=address, pin="123456")
 
-        # Act
         result = asyncio.run(ble_conn.connect())
 
-        # Assert
         mock_client_instance.connect.assert_called_once()
         mock_client_instance.pair.assert_called_once()
         mock_client_instance.start_notify.assert_called_once_with(
@@ -35,43 +32,62 @@ class TestBLEPinPairing(unittest.TestCase):
         )
         self.assertEqual(result, address)
 
+    @patch("sys.platform", "linux")
+    @patch("meshcore.ble_cx.BleakClient")
+    def test_ble_connection_with_pin_uses_agent_on_linux(self, mock_bleak_client):
+        """Linux: pair() runs inside the BlueZ passkey agent context."""
+        mock_client_instance = self._get_mock_bleak_client()
+        mock_bleak_client.return_value = mock_client_instance
+
+        entered = {"count": 0, "pin": None}
+
+        @asynccontextmanager
+        async def tracking_agent(pin):
+            entered["count"] += 1
+            entered["pin"] = pin
+            yield
+
+        address = "00:11:22:33:44:55"
+        ble_conn = BLEConnection(address=address, pin="123456")
+
+        with patch(
+            "meshcore.bluez_pairing_agent.passkey_agent", tracking_agent
+        ):
+            result = asyncio.run(ble_conn.connect())
+
+        self.assertEqual(entered["count"], 1)
+        self.assertEqual(entered["pin"], "123456")
+        mock_client_instance.pair.assert_called_once()
+        self.assertEqual(result, address)
+
+    @patch("sys.platform", "darwin")
     @patch("meshcore.ble_cx.BleakClient")
     def test_ble_connection_with_pin_failed_pairing(self, mock_bleak_client):
-        """Test BLE connection with PIN when pairing fails — re-raises (F17)."""
-        # Arrange
+        """Pairing failure disconnects and re-raises (F17)."""
         mock_client_instance = self._get_mock_bleak_client()
         mock_client_instance.pair = AsyncMock(side_effect=Exception("Pairing failed"))
         mock_bleak_client.return_value = mock_client_instance
 
-        address = "00:11:22:33:44:55"
-        pin = "123456"
-        ble_conn = BLEConnection(address=address, pin=pin)
+        ble_conn = BLEConnection(address="00:11:22:33:44:55", pin="123456")
 
-        # Act & Assert — pairing failure now re-raises instead of being
-        # swallowed, because a half-usable transport is worse than a clean
-        # failure (forensics finding F17).
         with self.assertRaises(Exception) as ctx:
             asyncio.run(ble_conn.connect())
         self.assertIn("Pairing failed", str(ctx.exception))
         mock_client_instance.connect.assert_called_once()
         mock_client_instance.pair.assert_called_once()
-        # disconnect should be called to clean up the failed connection
         mock_client_instance.disconnect.assert_called_once()
 
     @patch("meshcore.ble_cx.BleakClient")
     def test_ble_connection_without_pin_no_pairing(self, mock_bleak_client):
-        """Test BLE connection without PIN - no pairing should be attempted"""
-        # Arrange
+        """Without a PIN, pair() is not called."""
         mock_client_instance = self._get_mock_bleak_client()
         mock_bleak_client.return_value = mock_client_instance
 
         address = "00:11:22:33:44:55"
         ble_conn = BLEConnection(address=address)
 
-        # Act
         result = asyncio.run(ble_conn.connect())
 
-        # Assert
         mock_client_instance.connect.assert_called_once()
         mock_client_instance.pair.assert_not_called()
         mock_client_instance.start_notify.assert_called_once_with(
@@ -81,22 +97,16 @@ class TestBLEPinPairing(unittest.TestCase):
 
     @patch("meshcore.ble_cx.BleakClient")
     def test_ble_connection_pin_constructor_parameter(self, mock_bleak_client):
-        """Test that PIN parameter is properly stored in constructor"""
-        # Arrange
+        """PIN parameter is stored on BLEConnection."""
         address = "00:11:22:33:44:55"
         pin = "654321"
 
-        # Act
         ble_conn = BLEConnection(address=address, pin=pin)
 
-        # Assert
         self.assertEqual(ble_conn.pin, pin)
         self.assertEqual(ble_conn.address, address)
 
     def _get_mock_bleak_client(self):
-        """
-        Creates a mock BleakClient instance with all the necessary async methods and attributes.
-        """
         mock_client = MagicMock()
         mock_client.address = "00:11:22:33:44:55"
         mock_client.connect = AsyncMock()

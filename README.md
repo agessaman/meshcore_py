@@ -129,13 +129,15 @@ meshcore = await MeshCore.create_ble("12:34:56:78:90:AB", pin="123456")
 
 **PIN Pairing Features:**
 - Automatic pairing initiation when PIN is provided
-- Graceful fallback if pairing fails (connection continues if device is already paired)
+- On Linux, meshcore registers a short-lived BlueZ pairing agent that supplies the PIN during first-time pairing
+- Pairing failure disconnects and raises (avoids a half-usable transport)
 - Compatible with all BLE connection methods (address, scanning, pre-configured client)
 - Logging of pairing success/failure for debugging
 
 **Note:** BLE pairing behavior may vary by platform:
-- **Linux/Windows**: PIN pairing is fully supported
-- **macOS**: Pairing may be handled automatically by the system UI
+- **Linux**: PIN is delivered via a BlueZ `Agent1` registered for the bleak D-Bus connection
+- **Windows**: `pair()` is initiated, but passkey entry may still require the OS/system UI until bleak supports pairing callbacks
+- **macOS**: Pairing is handled by the system UI; the `pin` argument does not inject a passkey
 
 #### Auto-Reconnect and Connection Events
 
